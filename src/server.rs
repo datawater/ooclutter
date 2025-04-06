@@ -2,14 +2,16 @@ use crate::crypto::{self, EphemeralPair};
 use crate::packet::Packet;
 use crate::utils::GResult;
 
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use dashmap::DashMap;
+use smol::io::{AsyncReadExt, AsyncWriteExt};
+use smol::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::agreement::{self, UnparsedPublicKey, X25519};
 use ring::rand::{self, SecureRandom, SystemRandom};
 use uuid::Uuid;
+
+use std::sync::Arc;
 
 type KDFFn = fn(&[u8]) -> [u8; 32];
 type MessageCallbackFn = fn(&mut Server, &mut Packet);
@@ -18,72 +20,101 @@ type MessageCallbackFn = fn(&mut Server, &mut Packet);
 pub struct Session {
     device_ip: SocketAddr,
     device_id: Uuid,
-    session_id: Uuid,
     pub session_key: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    port_to_run_on: u16,
+    kdf: KDFFn,
+    uuid: Uuid,
+    message_callback: MessageCallbackFn,
 }
 
 #[derive(Debug)]
 pub struct Server {
-    port_to_run_on: u16,
-
-    session_keys: HashMap<Uuid, Session>,
-    kdf: KDFFn,
-
-    uuid: Uuid,
-    message_callback: MessageCallbackFn
+    config: Arc<ServerConfig>,
+    pub session_keys: Arc<DashMap<Uuid, Session>>,
 }
 
+unsafe impl Send for Session {}
+unsafe impl Sync for Session {}
+unsafe impl Send for Server {}
+unsafe impl Sync for Server {}
+
 impl Server {
-    pub fn new(port_to_run_on: u16, kdf: Option<KDFFn>, message_callback: Option<MessageCallbackFn>) -> Self {
-        Self {
+    pub fn new(
+        port_to_run_on: u16,
+        kdf: Option<KDFFn>,
+        message_callback: Option<MessageCallbackFn>,
+    ) -> Self {
+        let config = ServerConfig {
             port_to_run_on,
-            session_keys: HashMap::new(),
             kdf: kdf.unwrap_or(crypto::hkdf_sha256),
             uuid: uuid::Uuid::new_v4(),
-            message_callback: message_callback.unwrap_or(Self::default_msg_callback)
+            message_callback: message_callback.unwrap_or(Self::default_msg_callback),
+        };
+
+        Self {
+            config: Arc::new(config),
+            session_keys: Arc::new(DashMap::new()),
         }
     }
 
     fn default_msg_callback(&mut self, _pack: &mut Packet) {}
 
-    pub fn run(&mut self) -> GResult<()> {
-        let addr = format!("127.0.0.1:{}", self.port_to_run_on);
-        
-        eprintln!("[INFO] Running server on addr: {addr}");
+    pub async fn run(self) -> GResult<()> {
+        let addr = format!("127.0.0.1:{}", self.config.port_to_run_on);
+        let listener = TcpListener::bind(&addr).await?;
 
-        let listener = TcpListener::bind(addr)?;
-        let addr = listener.local_addr()?;
+        loop {
+            let (mut stream, addr) = listener.accept().await?;
+            let config = self.config.clone();
+            let session_keys = Arc::clone(&self.session_keys);
 
-        for stream in listener.incoming() {
-            if stream.is_err() {
-                break;
-            }
+            smol::spawn(async move {
+                let mut content = vec![0u8; 4096];
+                let n = stream.read(&mut content).await.unwrap();
 
-            let mut stream = stream?;
-            let mut content = vec![];
-
-            stream.read_to_end(&mut content)?;
-
-            let mut packet = serde_json::from_slice::<Packet>(content.as_slice()).unwrap_or_default();
-
-            match packet {
-                Packet::Handshake { .. } => {
-                    self.handle_handshake(packet, &mut stream, addr).unwrap()
+                if n == 0 {
+                    return;
                 }
-                Packet::Message { .. } => {
-                    (self.message_callback)(self, &mut packet);
-                },
-                Packet::Invalid => {
-                    stream.shutdown(Shutdown::Both)?;
-                    continue;
+                let content = &content[..n];
+
+                let mut packet = serde_json::from_slice::<Packet>(&content).unwrap_or_default();
+
+                match &packet {
+                    Packet::Handshake { .. } => {
+                        let mut server = Server {
+                            config: config.clone(),
+                            session_keys: Arc::clone(&session_keys),
+                        };
+
+                        server
+                            .handle_handshake(packet, &mut stream, addr)
+                            .await
+                            .unwrap();
+                        println!("{}", session_keys.len());
+                    }
+                    Packet::Message { .. } => {
+                        (config.message_callback)(
+                            &mut Server {
+                                config,
+                                session_keys,
+                            },
+                            &mut packet,
+                        );
+                    }
+                    Packet::Invalid => {
+                        stream.shutdown(Shutdown::Both).unwrap();
+                    }
                 }
-            }
+            })
+            .detach();
         }
-
-        Ok(())
     }
 
-    fn handle_handshake(
+    async fn handle_handshake(
         &mut self,
         packet: Packet,
         stream: &mut TcpStream,
@@ -91,14 +122,11 @@ impl Server {
     ) -> GResult<()> {
         let Packet::Handshake {
             ref ephemeral_key,
-            session_id,
             from,
         } = packet
         else {
             return Err("Not a handshake packet".into());
         };
-
-        eprintln!("[DEBUG] Recieved handshake packet: {packet:?}");
 
         let rng = rand::SystemRandom::new();
         let pair = EphemeralPair::generate(&rng)?;
@@ -106,13 +134,12 @@ impl Server {
         let session_key = agreement::agree_ephemeral(
             pair.private_key,
             &UnparsedPublicKey::new(&X25519, ephemeral_key),
-            self.kdf,
+            self.config.kdf,
         )?;
 
         self.session_keys.insert(
             from,
             Session {
-                session_id,
                 device_id: from,
                 device_ip: addr,
                 session_key: *session_key.as_array().unwrap(),
@@ -121,20 +148,21 @@ impl Server {
 
         let p = Packet::Handshake {
             ephemeral_key: pair.public_key.as_ref().into(),
-            session_id: session_id,
-            from: self.uuid,
+            from: self.config.uuid,
         };
 
         let ps = serde_json::to_string(&p)?;
-
-        stream.write(ps.as_bytes())?;
-        stream.shutdown(Shutdown::Both)?;
+        stream.write(ps.as_bytes()).await?;
 
         Ok(())
     }
 
-    pub fn get_session_for_uuid(&mut self, id: Uuid) -> Option<Session> {
-        self.session_keys.get(&id).cloned()
+    pub fn get_session_for_uuid(&self, id: Uuid) -> Option<Session> {
+        let x = self.session_keys.get(&id);
+        match x {
+            Some(x) => Some(x.clone()),
+            None => None,
+        }
     }
 }
 

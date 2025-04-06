@@ -10,32 +10,34 @@ mod utils;
 
 use args::*;
 use packet::*;
-use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use server::*;
 use utils::*;
 
 fn main() -> GResult<()> {
     let args = Args::from_env().unwrap_or_else(|err| panic!("{err}"));
 
-    if args.is_server {
-        run_server(&args)?;
-    } else {
-        run_client(&args)?;
-    }
+    smol::block_on(async move {
+        if args.is_server {
+            run_server(&args).await
+        } else {
+            run_client(&args)
+        }
+    })?;
 
     Ok(())
 }
 
-fn run_server(args: &Args) -> GResult<()> {    
-    let mut server = Server::new(args.port, None, Some(message_callback));
+async fn run_server(args: &Args) -> GResult<()> {
+    let server = Server::new(args.port, None, Some(message_callback));
 
-    server.run().unwrap();
+    server.run().await.unwrap();
 
     Ok(())
 }
 
 fn run_client(args: &Args) -> GResult<()> {
-    client::test_client(args.port);
+    smol::block_on(async move { client::test_client(args.port).await });
 
     Ok(())
 }
@@ -47,8 +49,9 @@ fn message_callback(server: &mut Server, packet: &mut Packet) {
         to: _,
         from,
         payload,
-        nonce
-    } = packet else {
+        nonce,
+    } = packet
+    else {
         unreachable!()
     };
 
@@ -59,7 +62,9 @@ fn message_callback(server: &mut Server, packet: &mut Packet) {
 
     let aad = Aad::empty();
 
-    key.open_in_place(nonce, aad, payload).unwrap();
+    let plaintext = key.open_in_place(nonce, aad, payload).unwrap();
 
-    println!("[DEBUG] Recieved message content: {:?}", unsafe { str::from_utf8_unchecked(payload) });
+    println!("[DEBUG] Recieved message content: {:?}", unsafe {
+        str::from_utf8_unchecked(plaintext)
+    });
 }

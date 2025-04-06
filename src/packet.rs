@@ -6,8 +6,6 @@ use uuid::Uuid;
 pub enum Packet {
     Handshake {
         ephemeral_key: Box<[u8]>,
-
-        session_id: Uuid,
         from: Uuid,
     },
 

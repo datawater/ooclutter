@@ -7,9 +7,11 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+dashmap = "6.1.0"
 ring = { version = "0.17.14", features = ["std"] }
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.140", features = ["alloc"] }
+smol = { version = "2.0.2", default-features = false }
 uuid = { version = "1.16.0", features = ["serde", "v4"] }
 
 [profile.dev]
