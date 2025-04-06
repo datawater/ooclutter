@@ -1,0 +1,31 @@
+cargo-features = ["codegen-backend"]
+
+[package]
+name = "ooclutter"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+ring = { version = "0.17.14", features = ["std"] }
+serde = { version = "1.0.219", features = ["alloc", "derive"] }
+serde_json = { version = "1.0.140", features = ["alloc"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
+
+[profile.dev]
+debug = true
+codegen-units = 1024
+codegen-backend = "cranelift"
+split-debuginfo = "unpacked"
+
+[profile.release]
+debug = false
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.size]
+inherits = "release"
+opt-level = "z"
+incremental = false
