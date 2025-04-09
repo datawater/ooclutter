@@ -141,7 +141,7 @@ impl Server {
                 &UnparsedPublicKey::new(&X25519, &ephemeral_key),
                 kdf,
             )
-            .map(|k| *k.as_array().unwrap())
+            .map(|k| k)
         })
         .await??;
 
@@ -150,7 +150,7 @@ impl Server {
             Session {
                 device_id: from,
                 device_ip: addr,
-                session_key: *session_key.as_array().unwrap(),
+                session_key: session_key,
             },
         );
 

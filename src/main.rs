@@ -1,4 +1,3 @@
-#![feature(slice_as_array, addr_parse_ascii, ip_from)]
 #![allow(dead_code)]
 
 mod args;
@@ -45,19 +44,24 @@ async fn run_server(args: &Args) -> GResult<()> {
         return Ok(());
     }
 
-    let local_ip = Ipv4Addr::parse_ascii(local_ip.to_string().as_bytes())?;
-    for i in 2..=255 {
-        let itp = &mut local_ip.octets();
+    for i in 103..=255 {
+        let itp = format!("{:?}", local_ip);
+        let itp = itp.split(".").collect::<Vec<_>>();
         let itp = format!("{}.{}.{}.{}:{}", itp[0], itp[1], itp[2], i, args.port);
         
         let stream = TcpStream::connect(&itp).await;
-        if stream.is_err() {continue;}
+        if stream.is_err() {
+            println!("{itp}: {}", stream.err().unwrap());
+            continue;
+        }
 
         let stream = stream.unwrap();
         let mut framed = Framed::new(stream, packet::JsonPacketCodec);
 
         framed.send(packet::Packet::Ping).await.unwrap();
         let packet = framed.next().await.unwrap().unwrap();
+
+        println!("{packet:?}");
 
         if packet == packet::Packet::Ack {
             println!("[INFO] YAY ALIVE ON {itp}");
