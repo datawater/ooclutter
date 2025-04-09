@@ -102,6 +102,6 @@ fn message_callback(server: &mut Server, packet: &mut Packet) {
     let plaintext = key.open_in_place(nonce, aad, payload).unwrap();
 
     println!("[DEBUG] Recieved message content: {:?}", unsafe {
-        str::from_utf8_unchecked(plaintext)
+        str::from_utf8(plaintext).unwrap()
     });
 }
