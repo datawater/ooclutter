@@ -68,7 +68,9 @@ impl Server {
 
     fn default_msg_callback(&mut self, _pack: &mut Packet) {}
 
-    pub async fn run(self) -> GResult<()> {
+    pub async fn run(&mut self) -> GResult<()> {
+        println!("[INFO] Running on port {}", self.config.port_to_run_on);
+        
         let addr = format!("127.0.0.1:{}", self.config.port_to_run_on);
         let listener = TcpListener::bind(&addr).await?;
 
@@ -86,11 +88,28 @@ impl Server {
                                 .handle_handshake(packet, &mut framed, addr)
                                 .await
                                 .unwrap();
-                        }
+                        },
+                        
                         Packet::Message { .. } => {
                             (server.config.message_callback)(&mut server, &mut packet);
-                        }
-                        Packet::Invalid => {}
+                        },
+                        
+                        Packet::Ping => {
+                            match framed.send(Packet::Ack).await {
+                                Err(e) => {
+                                    eprintln!("[ERROR] Error sending ACK: {e}");
+                                    break;
+                                },
+                                _ => {},
+                            }
+                        },
+                        
+                        Packet::Ack => {}
+
+                        Packet::Invalid => {
+                            eprintln!("[ERROR/WARN] Invalid packet recieved from: {addr:?}");
+                            break;
+                        },
                     }
                 }
             });
@@ -140,7 +159,7 @@ impl Server {
             from: self.config.uuid,
         };
 
-        stream.send(p).await?;
+        stream.send(p).await.unwrap();
 
         Ok(())
     }

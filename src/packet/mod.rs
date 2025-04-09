@@ -20,6 +20,9 @@ pub enum Packet {
         nonce: [u8; 12],
     },
 
+    Ping,
+    Ack,
+
     #[default]
     Invalid,
 }
