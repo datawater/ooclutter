@@ -1,5 +1,6 @@
-use smol::io::{AsyncReadExt, AsyncWriteExt};
-use smol::net::TcpStream;
+use futures_util::{SinkExt, StreamExt};
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 
 use ring::{
     aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey},
@@ -7,12 +8,14 @@ use ring::{
     rand::{SecureRandom, SystemRandom},
 };
 
+use crate::packet;
 use crate::{crypto, packet::Packet};
 use uuid::Uuid;
 
 pub async fn test_client(port: u16) {
     let addr = format!("127.0.0.1:{port}");
-    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    let stream = TcpStream::connect(&addr).await.unwrap();
+    let mut framed = Framed::new(stream, packet::JsonPacketCodec);
 
     let rng = SystemRandom::new();
     let my_priv_key = EphemeralPrivateKey::generate(&X25519, &rng).unwrap();
@@ -24,26 +27,17 @@ pub async fn test_client(port: u16) {
         from: my_id,
     };
 
-    let data = serde_json::to_vec(&handshake).unwrap();
-    stream.write_all(&data).await.unwrap();
-    stream.flush().await.unwrap();
+    framed.send(handshake).await.unwrap();
 
-    let mut buffer = vec![0u8; 4096];
-    let n = stream.read(&mut buffer).await.unwrap();
-    let buffer = &buffer[..n];
+    let packet = framed.next().await.unwrap().unwrap();
 
-    let packet: Packet = serde_json::from_slice(buffer).unwrap();
     let Packet::Handshake {
         ephemeral_key,
         from,
-    } = packet
+    }: Packet = packet
     else {
         panic!("Invalid handshake response from server");
     };
-
-    stream.shutdown(std::net::Shutdown::Both).unwrap();
-
-    let mut stream = TcpStream::connect(&addr).await.unwrap();
 
     let session_key = ring::agreement::agree_ephemeral(
         my_priv_key,
@@ -72,6 +66,5 @@ pub async fn test_client(port: u16) {
         nonce: nonce_bytes,
     };
 
-    let serialized = serde_json::to_vec(&packet).unwrap();
-    stream.write_all(&serialized).await.unwrap();
+    framed.send(packet).await.unwrap();
 }

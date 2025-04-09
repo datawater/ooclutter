@@ -15,9 +15,7 @@ impl Args {
     pub fn from_env() -> GResult<Self> {
         let mut s = Self::default();
 
-        let mut argv = std::env::args()
-            .into_iter()
-            .collect::<std::collections::VecDeque<_>>();
+        let mut argv = std::env::args().collect::<std::collections::VecDeque<_>>();
         let mut argc = argv.len() as isize;
 
         argv.pop_front();

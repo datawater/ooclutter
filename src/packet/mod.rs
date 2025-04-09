@@ -1,3 +1,6 @@
+mod codec;
+pub use codec::*;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

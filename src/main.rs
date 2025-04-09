@@ -14,16 +14,13 @@ use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use server::*;
 use utils::*;
 
-fn main() -> GResult<()> {
+#[tokio::main]
+async fn main() -> GResult<()> {
     let args = Args::from_env().unwrap_or_else(|err| panic!("{err}"));
-
-    smol::block_on(async move {
-        if args.is_server {
-            run_server(&args).await
-        } else {
-            run_client(&args)
-        }
-    })?;
+    match args.is_server {
+        true => run_server(&args).await.unwrap(),
+        false => run_client(&args).await.unwrap(),
+    }
 
     Ok(())
 }
@@ -31,13 +28,13 @@ fn main() -> GResult<()> {
 async fn run_server(args: &Args) -> GResult<()> {
     let server = Server::new(args.port, None, Some(message_callback));
 
-    server.run().await.unwrap();
+    server.run().await?;
 
     Ok(())
 }
 
-fn run_client(args: &Args) -> GResult<()> {
-    smol::block_on(async move { client::test_client(args.port).await });
+async fn run_client(args: &Args) -> GResult<()> {
+    client::test_client(args.port).await;
 
     Ok(())
 }
