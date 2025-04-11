@@ -1,4 +1,3 @@
-- acutal logging
 - actual client
 - use blake3 instead of sha256 for hkdf
 - use xchacha-poly1305 instead of aes
