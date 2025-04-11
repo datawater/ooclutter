@@ -13,7 +13,6 @@ use server::*;
 use utils::*;
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-use std::net::Ipv4Addr;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
@@ -44,28 +43,31 @@ async fn run_server(args: &Args) -> GResult<()> {
         return Ok(());
     }
 
-    for i in 103..=255 {
-        let itp = format!("{:?}", local_ip);
-        let itp = itp.split(".").collect::<Vec<_>>();
-        let itp = format!("{}.{}.{}.{}:{}", itp[0], itp[1], itp[2], i, args.port);
-        
-        let stream = TcpStream::connect(&itp).await;
-        if stream.is_err() {
-            println!("{itp}: {}", stream.err().unwrap());
-            continue;
-        }
-
-        let stream = stream.unwrap();
-        let mut framed = Framed::new(stream, packet::JsonPacketCodec);
-
-        framed.send(packet::Packet::Ping).await.unwrap();
-        let packet = framed.next().await.unwrap().unwrap();
-
-        println!("{packet:?}");
-
-        if packet == packet::Packet::Ack {
-            println!("[INFO] YAY ALIVE ON {itp}");
-        }
+    for i in 2..=255 {
+        let args = args.clone();
+        tokio::spawn(async move {
+            let itp = format!("{:?}", local_ip);
+            let itp = itp.split(".").collect::<Vec<_>>();
+            let itp = format!("{}.{}.{}.{}:{}", itp[0], itp[1], itp[2], i, args.port);
+            
+            let stream = TcpStream::connect(&itp).await;
+            if stream.is_err() {
+                println!("{itp}: {}", stream.err().unwrap());
+                return;
+            }
+    
+            let stream = stream.unwrap();
+            let mut framed = Framed::new(stream, packet::JsonPacketCodec);
+    
+            framed.send(packet::Packet::Ping).await.unwrap();
+            let packet = framed.next().await.unwrap().unwrap();
+    
+            println!("{packet:?}");
+    
+            if packet == packet::Packet::Ack {
+                println!("[INFO] YAY ALIVE ON {itp}");
+            }
+        });
     }
 
     s.await??;

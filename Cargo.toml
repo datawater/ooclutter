@@ -22,7 +22,7 @@ debug = true
 codegen-units = 1024
 codegen-backend = "cranelift"
 split-debuginfo = "unpacked"
-incremental = false
+# incremental = false
 
 [profile.release]
 debug = false
@@ -30,7 +30,7 @@ strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
-incremental = false
+# incremental = false
 
 [profile.size]
 inherits = "release"

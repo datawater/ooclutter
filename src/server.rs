@@ -6,7 +6,7 @@ use futures_util::SinkExt;
 use tokio_stream::StreamExt;
 
 use std::net::SocketAddr;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -71,8 +71,14 @@ impl Server {
     pub async fn run(&mut self) -> GResult<()> {
         println!("[INFO] Running on port {}", self.config.port_to_run_on);
         
-        let addr = format!("127.0.0.1:{}", self.config.port_to_run_on);
-        let listener = TcpListener::bind(&addr).await?;
+        let addr = format!("0.0.0.0:{}", self.config.port_to_run_on).parse()?;
+
+        let socket = TcpSocket::new_v4()?;
+        socket.set_reuseaddr(true)?;
+        socket.set_reuseport(true)?;
+        socket.set_nodelay(true)?;
+        socket.bind(addr)?;
+        let listener = socket.listen(4096)?;
 
         loop {
             let (stream, addr) = listener.accept().await?;

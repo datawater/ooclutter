@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 
 use ring::{
@@ -13,8 +13,11 @@ use crate::{crypto, packet::Packet};
 use uuid::Uuid;
 
 pub async fn test_client(port: u16) {
-    let addr = format!("127.0.0.1:{port}");
-    let stream = TcpStream::connect(&addr).await.unwrap();
+    let addr = format!("127.0.0.1:{port}").parse().unwrap();
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_nodelay(true).unwrap();
+    let stream = socket.connect(addr).await.unwrap();
+
     let mut framed = Framed::new(stream, packet::JsonPacketCodec);
 
     let rng = SystemRandom::new();
