@@ -6,7 +6,7 @@ use futures_util::SinkExt;
 use tokio_stream::StreamExt;
 
 use std::net::SocketAddr;
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpSocket, TcpStream};
 use tokio_util::codec::Framed;
 
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -70,7 +70,7 @@ impl Server {
 
     pub async fn run(&mut self) -> GResult<()> {
         println!("[INFO] Running on port {}", self.config.port_to_run_on);
-        
+
         let addr = format!("0.0.0.0:{}", self.config.port_to_run_on).parse()?;
 
         let socket = TcpSocket::new_v4()?;
@@ -87,6 +87,8 @@ impl Server {
             let mut server = self.clone();
 
             tokio::spawn(async move {
+                // hacky fix because dyn StdErr can not be shared through threads safely
+                #[allow(clippy::match_result_ok)]
                 while let Some(mut packet) = framed.next().await.unwrap_or(Err("".into())).ok() {
                     match &packet {
                         Packet::Handshake { .. } => {
@@ -94,28 +96,25 @@ impl Server {
                                 .handle_handshake(packet, &mut framed, addr)
                                 .await
                                 .unwrap();
-                        },
-                        
+                        }
+
                         Packet::Message { .. } => {
                             (server.config.message_callback)(&mut server, &mut packet);
-                        },
-                        
+                        }
+
                         Packet::Ping => {
-                            match framed.send(Packet::Ack).await {
-                                Err(e) => {
-                                    eprintln!("[ERROR] Error sending ACK: {e}");
-                                    break;
-                                },
-                                _ => {},
+                            if let Err(e) = framed.send(Packet::Ack).await {
+                                eprintln!("[ERROR] Error sending ACK: {e}");
+                                break;
                             }
-                        },
-                        
+                        }
+
                         Packet::Ack => {}
 
                         Packet::Invalid => {
                             eprintln!("[ERROR/WARN] Invalid packet recieved from: {addr:?}");
                             break;
-                        },
+                        }
                     }
                 }
             });
@@ -147,7 +146,6 @@ impl Server {
                 &UnparsedPublicKey::new(&X25519, &ephemeral_key),
                 kdf,
             )
-            .map(|k| k)
         })
         .await??;
 
@@ -156,7 +154,7 @@ impl Server {
             Session {
                 device_id: from,
                 device_ip: addr,
-                session_key: session_key,
+                session_key,
             },
         );
 

@@ -12,8 +12,8 @@ use packet::*;
 use server::*;
 use utils::*;
 
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use futures_util::{SinkExt, StreamExt};
+use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -31,9 +31,7 @@ async fn main() -> GResult<()> {
 async fn run_server(args: &Args) -> GResult<()> {
     let mut server = Server::new(args.port, None, Some(message_callback));
 
-    let s = tokio::spawn(async move {
-        server.run().await
-    });
+    let s = tokio::spawn(async move { server.run().await });
 
     let local_ip = utils::get_local_addr()?;
     println!("[INFO] Local ip: {:?}", local_ip);
@@ -49,21 +47,21 @@ async fn run_server(args: &Args) -> GResult<()> {
             let itp = format!("{:?}", local_ip);
             let itp = itp.split(".").collect::<Vec<_>>();
             let itp = format!("{}.{}.{}.{}:{}", itp[0], itp[1], itp[2], i, args.port);
-            
+
             let stream = TcpStream::connect(&itp).await;
             if stream.is_err() {
                 println!("{itp}: {}", stream.err().unwrap());
                 return;
             }
-    
+
             let stream = stream.unwrap();
             let mut framed = Framed::new(stream, packet::JsonPacketCodec);
-    
+
             framed.send(packet::Packet::Ping).await.unwrap();
             let packet = framed.next().await.unwrap().unwrap();
-    
+
             println!("{packet:?}");
-    
+
             if packet == packet::Packet::Ack {
                 println!("[INFO] YAY ALIVE ON {itp}");
             }

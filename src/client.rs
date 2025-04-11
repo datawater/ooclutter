@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{TcpSocket, TcpStream};
+use tokio::net::TcpSocket;
 use tokio_util::codec::Framed;
 
 use ring::{
