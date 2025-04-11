@@ -9,9 +9,11 @@ license = "Apache-2.0"
 [dependencies]
 dashmap = "6.1.0"
 futures-util = { version = "0.3.31", features = ["sink"] }
+log = "0.4.27"
 ring = { version = "0.17.14", features = ["std"] }
 serde = { version = "1.0.219", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.140", features = ["alloc"] }
+simple_logger = "5.0.0"
 tokio = { version = "1.44.2", features = ["io-util", "macros", "net", "rt-multi-thread"] }
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.14", features = ["codec", "net"] }
@@ -22,7 +24,7 @@ debug = true
 codegen-units = 1024
 codegen-backend = "cranelift"
 split-debuginfo = "unpacked"
-# incremental = false
+incremental = false
 
 [profile.release]
 debug = false
@@ -30,7 +32,7 @@ strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
-# incremental = false
+incremental = false
 
 [profile.size]
 inherits = "release"

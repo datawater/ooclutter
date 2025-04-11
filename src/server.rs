@@ -1,6 +1,6 @@
 use crate::crypto::{self, EphemeralPair};
-use crate::packet::{JsonPacketCodec, Packet};
-use crate::utils::GResult;
+use crate::packet::{ErrorType, JsonPacketCodec, Packet};
+use crate::utils::{self, GResult};
 
 use futures_util::SinkExt;
 use tokio_stream::StreamExt;
@@ -19,26 +19,25 @@ use dashmap::DashMap;
 use std::sync::Arc;
 
 type KDFFn = fn(&[u8]) -> [u8; 32];
-type MessageCallbackFn = fn(&mut Server, &mut Packet);
+type ActualMessageCallbackFn = fn(&[u8]);
 
 #[derive(Debug, Clone)]
 pub struct Session {
-    device_ip: SocketAddr,
-    device_id: Uuid,
+    pub device_ip: SocketAddr,
+    pub device_id: Uuid,
     pub session_key: [u8; 32],
 }
 
-#[derive(Debug)]
 pub struct ServerConfig {
-    port_to_run_on: u16,
+    pub port_to_run_on: u16,
     kdf: KDFFn,
-    uuid: Uuid,
-    message_callback: MessageCallbackFn,
+    pub uuid: Uuid,
+    message_callback: ActualMessageCallbackFn,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Server {
-    config: Arc<ServerConfig>,
+    pub config: Arc<ServerConfig>,
     pub session_keys: Arc<DashMap<Uuid, Session>>,
 }
 
@@ -51,13 +50,13 @@ impl Server {
     pub fn new(
         port_to_run_on: u16,
         kdf: Option<KDFFn>,
-        message_callback: Option<MessageCallbackFn>,
+        message_callback: ActualMessageCallbackFn,
     ) -> Self {
         let config = ServerConfig {
             port_to_run_on,
             kdf: kdf.unwrap_or(crypto::hkdf_sha256),
             uuid: uuid::Uuid::new_v4(),
-            message_callback: message_callback.unwrap_or(Self::default_msg_callback),
+            message_callback,
         };
 
         Self {
@@ -66,10 +65,8 @@ impl Server {
         }
     }
 
-    fn default_msg_callback(&mut self, _pack: &mut Packet) {}
-
     pub async fn run(&mut self) -> GResult<()> {
-        println!("[INFO] Running on port {}", self.config.port_to_run_on);
+        log::info!("Running on port {}", self.config.port_to_run_on);
 
         let addr = format!("0.0.0.0:{}", self.config.port_to_run_on).parse()?;
 
@@ -89,30 +86,50 @@ impl Server {
             tokio::spawn(async move {
                 // hacky fix because dyn StdErr can not be shared through threads safely
                 #[allow(clippy::match_result_ok)]
-                while let Some(mut packet) = framed.next().await.unwrap_or(Err("".into())).ok() {
+                while let Some(packet) = framed.next().await.unwrap_or(Err("".into())).ok() {
                     match &packet {
                         Packet::Handshake { .. } => {
-                            server
-                                .handle_handshake(packet, &mut framed, addr)
-                                .await
-                                .unwrap();
+                            let e = server.handle_handshake(packet, &mut framed, addr).await;
+
+                            if e.is_err() {
+                                log::error!("Error handling handshake {}", unsafe {
+                                    e.err().unwrap_unchecked()
+                                });
+                            }
                         }
 
                         Packet::Message { .. } => {
-                            (server.config.message_callback)(&mut server, &mut packet);
+                            let err = server.handle_message(&mut framed, &packet).await;
+                            if err.is_err() {
+                                log::error!("Error sending back error {}", unsafe {
+                                    err.err().unwrap_unchecked()
+                                });
+                                continue;
+                            }
+                            let err = unsafe { err.unwrap_unchecked() };
+
+                            if err.is_some() {
+                                let err = framed.send(unsafe { err.unwrap_unchecked() }).await;
+
+                                if err.is_err() {
+                                    log::error!("Error sending back error {}", unsafe {
+                                        err.err().unwrap_unchecked()
+                                    });
+                                }
+                            }
                         }
 
                         Packet::Ping => {
                             if let Err(e) = framed.send(Packet::Ack).await {
-                                eprintln!("[ERROR] Error sending ACK: {e}");
+                                log::error!("Error sending ACK: {e}");
                                 break;
                             }
                         }
 
-                        Packet::Ack => {}
+                        Packet::Ack | Packet::Error { type_: _ } => {}
 
                         Packet::Invalid => {
-                            eprintln!("[ERROR/WARN] Invalid packet recieved from: {addr:?}");
+                            log::warn!("[ERROR/WARN] Invalid packet recieved from: {addr:?}");
                             break;
                         }
                     }
@@ -163,9 +180,74 @@ impl Server {
             from: self.config.uuid,
         };
 
-        stream.send(p).await.unwrap();
-
+        // I need to find a way to handle this error
+        let _ = stream.send(p).await;
         Ok(())
+    }
+
+    async fn handle_message(
+        &self,
+        stream: &mut Framed<TcpStream, JsonPacketCodec>,
+        packet: &Packet,
+    ) -> GResult<Option<Packet>> {
+        log::debug!("Recieved message packet: {packet:?}");
+
+        let Packet::Message {
+            to,
+            from,
+            payload,
+            nonce,
+        } = packet
+        else {
+            unreachable!()
+        };
+
+        if *to != self.config.uuid {
+            let to_session = self.session_keys.get(to);
+            match to_session {
+                Some(s) => {
+                    // TODO: Proper routing
+                    let _ = utils::send_packet_to_ip(s.device_ip, packet.clone()).await;
+
+                    return Ok(None);
+                }
+
+                None => {
+                    let x = stream
+                        .send(Packet::Error {
+                            type_: ErrorType::CannotDeliverMessage,
+                        })
+                        .await;
+
+                    if x.is_err() {
+                        log::error!("{}", unsafe { x.err().unwrap_unchecked() });
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
+        let from_session = self.session_keys.get(from);
+
+        if from_session.is_none() {
+            return Ok(Some(Packet::Error {
+                type_: ErrorType::WhoRU,
+            }));
+        }
+        let session = unsafe { from_session.unwrap_unchecked() };
+
+        let unbound_key = UnboundKey::new(&AES_256_GCM, &session.session_key)?;
+        let key = LessSafeKey::new(unbound_key);
+        let nonce = Nonce::assume_unique_for_key(*nonce);
+
+        let aad = Aad::empty();
+
+        let mut payload = payload.clone();
+        let plaintext = key.open_in_place(nonce, aad, &mut payload)?;
+
+        (self.config.message_callback)(plaintext);
+
+        Ok(None)
     }
 
     pub fn get_session_for_uuid(
@@ -180,9 +262,9 @@ impl Session {
     pub fn generate_message_packet(&self, message: &[u8], self_uuid: Uuid) -> GResult<Packet> {
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0u8; 12];
-        rng.fill(&mut nonce_bytes).unwrap();
+        rng.fill(&mut nonce_bytes)?;
 
-        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.session_key).unwrap();
+        let unbound_key = UnboundKey::new(&AES_256_GCM, &self.session_key)?;
 
         let key = LessSafeKey::new(unbound_key);
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
@@ -190,8 +272,7 @@ impl Session {
 
         let mut message = message.to_vec();
 
-        key.seal_in_place_append_tag(nonce, aad, &mut message)
-            .unwrap();
+        key.seal_in_place_append_tag(nonce, aad, &mut message)?;
 
         Ok(Packet::Message {
             to: self.device_id,
@@ -199,5 +280,9 @@ impl Session {
             payload: message.into_boxed_slice(),
             nonce: nonce_bytes,
         })
+    }
+
+    pub async fn send_packet(&self, packet: Packet) -> GResult<()> {
+        utils::send_packet_to_ip(self.device_ip, packet).await
     }
 }

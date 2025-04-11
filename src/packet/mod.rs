@@ -22,7 +22,19 @@ pub enum Packet {
 
     Ping,
     Ack,
+    Error {
+        type_: ErrorType,
+    },
 
     #[default]
     Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ErrorType {
+    WhoRU,
+    CannotDeliverMessage,
+
+    #[default]
+    NoError,
 }

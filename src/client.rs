@@ -12,8 +12,11 @@ use crate::packet;
 use crate::{crypto, packet::Packet};
 use uuid::Uuid;
 
-pub async fn test_client(port: u16) {
-    let addr = format!("127.0.0.1:{port}").parse().unwrap();
+// WARNING This is just debug code
+pub async fn test_client(port: u16, addr: Option<&str>) {
+    let addr = format!("{}:{port}", addr.unwrap_or("127.0.0.1"))
+        .parse()
+        .unwrap();
     let socket = TcpSocket::new_v4().unwrap();
     socket.set_nodelay(true).unwrap();
     let stream = socket.connect(addr).await.unwrap();

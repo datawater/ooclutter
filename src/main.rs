@@ -8,17 +8,17 @@ mod server;
 mod utils;
 
 use args::*;
-use packet::*;
 use server::*;
 use utils::*;
 
 use futures_util::{SinkExt, StreamExt};
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 #[tokio::main]
 async fn main() -> GResult<()> {
+    simple_logger::SimpleLogger::new().env().init().unwrap();
+
     let args = Args::from_env().unwrap_or_else(|err| panic!("{err}"));
     match args.is_server {
         true => run_server(&args).await.unwrap(),
@@ -29,28 +29,41 @@ async fn main() -> GResult<()> {
 }
 
 async fn run_server(args: &Args) -> GResult<()> {
-    let mut server = Server::new(args.port, None, Some(message_callback));
+    let mut server = Server::new(args.port, None, message_callback);
 
     let s = tokio::spawn(async move { server.run().await });
 
     let local_ip = utils::get_local_addr()?;
-    println!("[INFO] Local ip: {:?}", local_ip);
+    log::info!("Local ip: {:?}", local_ip);
 
     if !local_ip.is_ipv4() {
-        println!("girl how am i supposed to loop over ipv6");
+        log::error!("girl how am i supposed to loop over ipv6");
         return Ok(());
     }
 
-    for i in 2..=255 {
-        let args = args.clone();
-        tokio::spawn(async move {
-            let itp = format!("{:?}", local_ip);
-            let itp = itp.split(".").collect::<Vec<_>>();
-            let itp = format!("{}.{}.{}.{}:{}", itp[0], itp[1], itp[2], i, args.port);
+    let local_ip_as_string = format!("{:?}", local_ip);
 
-            let stream = TcpStream::connect(&itp).await;
+    for i in 2..255 {
+        let i = i.to_string();
+        let port = args.port;
+
+        let mut remote_address_as_vec = local_ip_as_string
+            .split(".")
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>();
+
+        if remote_address_as_vec[3] == i {
+            continue;
+        }
+
+        remote_address_as_vec[3] = i;
+
+        let remote_address = remote_address_as_vec.join(".");
+        let remote_address_with_port = format!("{remote_address}:{}", port);
+
+        tokio::spawn(async move {
+            let stream = TcpStream::connect(&remote_address_with_port).await;
             if stream.is_err() {
-                println!("{itp}: {}", stream.err().unwrap());
                 return;
             }
 
@@ -60,11 +73,11 @@ async fn run_server(args: &Args) -> GResult<()> {
             framed.send(packet::Packet::Ping).await.unwrap();
             let packet = framed.next().await.unwrap().unwrap();
 
-            println!("{packet:?}");
-
             if packet == packet::Packet::Ack {
-                println!("[INFO] YAY ALIVE ON {itp}");
+                log::info!("YAY ALIVE ON {remote_address}");
             }
+
+            client::test_client(port, Some(&remote_address)).await;
         });
     }
 
@@ -74,34 +87,13 @@ async fn run_server(args: &Args) -> GResult<()> {
 }
 
 async fn run_client(args: &Args) -> GResult<()> {
-    client::test_client(args.port).await;
+    client::test_client(args.port, None).await;
 
     Ok(())
 }
 
-fn message_callback(server: &mut Server, packet: &mut Packet) {
-    eprintln!("[DEBUG] Recieved message packet: {packet:?}");
-
-    let Packet::Message {
-        to: _,
-        from,
-        payload,
-        nonce,
-    } = packet
-    else {
-        unreachable!()
-    };
-
-    let session = server.get_session_for_uuid(*from).unwrap();
-    let unbound_key = UnboundKey::new(&AES_256_GCM, &session.session_key).unwrap();
-    let key = LessSafeKey::new(unbound_key);
-    let nonce = Nonce::assume_unique_for_key(*nonce);
-
-    let aad = Aad::empty();
-
-    let plaintext = key.open_in_place(nonce, aad, payload).unwrap();
-
-    println!("[DEBUG] Recieved message content: {:?}", unsafe {
+fn message_callback(plaintext: &[u8]) {
+    log::debug!("Recieved message content: {:?}", unsafe {
         std::str::from_utf8_unchecked(plaintext)
     });
 }
