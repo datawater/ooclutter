@@ -1,15 +1,8 @@
-#![allow(dead_code)]
-
 mod args;
-mod client;
-mod crypto;
-mod packet;
-mod server;
-mod utils;
+use args::Args;
 
-use args::*;
-use server::*;
-use utils::*;
+use ooclutter_lib::{client, packet, server::*};
+use ooclutter_lib::utils::{self, *};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
